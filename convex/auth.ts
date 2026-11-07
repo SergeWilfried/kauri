@@ -2,6 +2,7 @@
 import { ConvexCredentials } from "@convex-dev/auth/providers/ConvexCredentials";
 import { Password } from "@convex-dev/auth/providers/Password";
 import { convexAuth, createAccount, retrieveAccount } from "@convex-dev/auth/server";
+import { ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { hashActivationCode } from "./users";
 
@@ -68,7 +69,10 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         const userId = keyId && secret
           ? await ctx.runMutation(internal.deviceKeys.verify, { keyId, secret })
           : null;
-        if (!userId) throw new Error("Invalid credentials");
+        // A ConvexError keeps its code in production (a plain Error reaches
+        // the app as "Server Error"): the app tells a refused key, which
+        // needs the password, from a failed call it should retry
+        if (!userId) throw new ConvexError("DEVICE_KEY_REFUSED");
         return { userId };
       },
     }),
