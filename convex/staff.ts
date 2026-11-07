@@ -4,6 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { mutation, MutationCtx, query, QueryCtx } from "./_generated/server";
 import { authz } from "./authz";
 import { createActivationCode, normalizeStaffPhone, requireUser, ROLE } from "./users";
+import { revokeDeviceKeys } from "./deviceKeys";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -222,6 +223,7 @@ export const setStatus = mutation({
         status: "suspended", activationCodeHash: undefined, activationExpiresAt: undefined,
       });
       await endSessions(ctx, user._id);
+      await revokeDeviceKeys(ctx, user._id);
     } else {
       await ctx.db.patch(user._id, { status: "active" });
     }

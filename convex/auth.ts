@@ -57,6 +57,21 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         throw new Error("Invalid credentials");
       },
     }),
+    // A phone where the agent set their PIN signs them back in with its
+    // device key once the session has expired (deviceKeys.ts):
+    // signIn("deviceKey", { keyId, secret }). No password, no account.
+    ConvexCredentials({
+      id: "deviceKey",
+      authorize: async (params, ctx) => {
+        const keyId = typeof params.keyId === "string" ? params.keyId : "";
+        const secret = typeof params.secret === "string" ? params.secret : "";
+        const userId = keyId && secret
+          ? await ctx.runMutation(internal.deviceKeys.verify, { keyId, secret })
+          : null;
+        if (!userId) throw new Error("Invalid credentials");
+        return { userId };
+      },
+    }),
   ],
   callbacks: {
     // Staff are created by an administrator (or the seed), never by sign-up.

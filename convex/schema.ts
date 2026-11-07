@@ -272,4 +272,20 @@ reconciliations: defineTable({
     status: v.union(v.literal("active"), v.literal("revoked")),
     createdAt: v.number(),
   }).index("by_key_hash", ["keyHash"]),
+
+  // 9. DEVICE KEYS (deviceKeys.ts)
+  // Lets a phone where an agent set their PIN sign that agent back in when
+  // the server session has expired, without the password: the app keeps the
+  // key in its secure storage and sends it with the "deviceKey" provider
+  // (auth.ts). One per agent and app install; deleted when the agent is
+  // suspended, unbound from a TPE or has their password reset.
+  deviceKeys: defineTable({
+    userId: v.id("users"),
+    installId: v.string(), // random id of the app install, chosen by the phone
+    secretHash: v.string(), // SHA-256 hex of the secret; the secret is never stored
+    createdAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_install", ["userId", "installId"]),
 });
