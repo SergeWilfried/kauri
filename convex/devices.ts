@@ -11,6 +11,7 @@ import { geoFix } from "./schema";
 import { Doc, Id } from "./_generated/dataModel";
 import { agentsOfDevice, deviceOfUser } from "./deviceAccess";
 import { assignedDevice, requireUser } from "./users";
+import { revokeDeviceKeys } from "./deviceKeys";
 
 /**
  * Return the authenticated user after checking the devices:bind permission.
@@ -175,7 +176,11 @@ export const unbindDevice = mutation({
     const leaving = args.userId ? agents.filter((a) => a === args.userId) : agents;
     if (leaving.length === 0) return device._id;
 
-    for (const userId of leaving) await removeAgent(ctx, device, userId);
+    for (const userId of leaving) {
+      await removeAgent(ctx, device, userId);
+      // Unbound: that phone no longer signs the agent in with their PIN alone
+      await revokeDeviceKeys(ctx, userId);
+    }
     await ctx.db.patch(device._id, { boundBy: actor._id, boundAt: Date.now() });
     return device._id;
   },

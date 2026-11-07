@@ -2,6 +2,7 @@
 import { ConvexCredentials } from "@convex-dev/auth/providers/ConvexCredentials";
 import { Password } from "@convex-dev/auth/providers/Password";
 import { convexAuth, createAccount, retrieveAccount } from "@convex-dev/auth/server";
+import { ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { hashActivationCode } from "./users";
 
@@ -55,6 +56,24 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           return { userId: user._id };
         }
         throw new Error("Invalid credentials");
+      },
+    }),
+    // A phone where the agent set their PIN signs them back in with its
+    // device key once the session has expired (deviceKeys.ts):
+    // signIn("deviceKey", { keyId, secret }). No password, no account.
+    ConvexCredentials({
+      id: "deviceKey",
+      authorize: async (params, ctx) => {
+        const keyId = typeof params.keyId === "string" ? params.keyId : "";
+        const secret = typeof params.secret === "string" ? params.secret : "";
+        const userId = keyId && secret
+          ? await ctx.runMutation(internal.deviceKeys.verify, { keyId, secret })
+          : null;
+        // A ConvexError keeps its code in production (a plain Error reaches
+        // the app as "Server Error"): the app tells a refused key, which
+        // needs the password, from a failed call it should retry
+        if (!userId) throw new ConvexError("DEVICE_KEY_REFUSED");
+        return { userId };
       },
     }),
   ],

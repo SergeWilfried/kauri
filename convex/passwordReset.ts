@@ -7,6 +7,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { action, internalMutation } from "./_generated/server";
 import { hashActivationCode } from "./users";
+import { revokeDeviceKeys } from "./deviceKeys";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -37,6 +38,8 @@ export const consumeResetCode = internalMutation({
       return null;
     }
     await ctx.db.patch(user._id, { activationCodeHash: undefined, activationExpiresAt: undefined });
+    // A reset secures the account: phones need the new password, not just a PIN
+    await revokeDeviceKeys(ctx, user._id);
     return user._id;
   },
 });
