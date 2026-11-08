@@ -1,6 +1,6 @@
 // convex/users.ts — current staff member, and role administration
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, MutationCtx, query, QueryCtx } from "./_generated/server";
 import { authz } from "./authz";
@@ -85,14 +85,26 @@ export const normalizeStaffPhones = internalMutation({
 
 /**
  * Return the signed-in, active staff member; throw if unauthenticated, missing or suspended. Authz user IDs are `users._id`.
+ * The errors are ConvexErrors ("Unauthenticated", "User not found", "Account
+ * suspended") so clients can tell them apart in production, where a plain
+ * Error reaches them as "Server Error".
  */
 export async function requireUser(ctx: QueryCtx) {
   const userId = await getAuthUserId(ctx);
-  if (!userId) throw new Error("Unauthenticated");
+  if (!userId) throw new ConvexError("Unauthenticated");
   const user = await ctx.db.get(userId);
-  if (!user) throw new Error("User not found");
-  if (user.status !== "active") throw new Error("Account suspended");
+  if (!user) throw new ConvexError("User not found");
+  if (user.status !== "active") throw new ConvexError("Account suspended");
   return user;
+}
+
+/**
+ * Refuse a call sent for another staff member: on a shared TPE, Convex sends a
+ * call held while offline with whichever agent is signed in when the network
+ * returns. Throws `AGENT_MISMATCH`; the app keeps the call for its own agent.
+ */
+export function requireExpectedUser(user: { _id: string }, expected: string | undefined) {
+  if (expected !== undefined && expected !== user._id) throw new ConvexError("AGENT_MISMATCH");
 }
 
 /**

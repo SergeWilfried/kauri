@@ -10,7 +10,7 @@ import { getAuthSessionId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { internalMutation, mutation, MutationCtx } from "./_generated/server";
-import { requireUser } from "./users";
+import { requireExpectedUser, requireUser } from "./users";
 
 async function sha256Hex(text: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -46,13 +46,15 @@ export const revokeAll = internalMutation({
  * Returns `{ keyId, secret }` once; only the secret's hash is stored.
  * Refused once the caller's session has been ended (a password reset or
  * suspension), even while its access token is still valid: a key issued then
- * would outlive the revocation. Throws `SESSION_ENDED`, `INVALID_INSTALL_ID`
- * or `TOO_MANY_DEVICE_KEYS`.
+ * would outlive the revocation. Throws `SESSION_ENDED`, `INVALID_INSTALL_ID`,
+ * `TOO_MANY_DEVICE_KEYS`, or `AGENT_MISMATCH` when `expectedUserId` is not
+ * the caller. Returns `userId`, whom the key signs in.
  */
 export const issue = mutation({
-  args: { installId: v.string() },
-  handler: async (ctx, { installId }) => {
+  args: { installId: v.string(), expectedUserId: v.optional(v.string()) },
+  handler: async (ctx, { installId, expectedUserId }) => {
     const user = await requireUser(ctx);
+    requireExpectedUser(user, expectedUserId);
     const sessionId = await getAuthSessionId(ctx);
     const session = sessionId && ctx.db.normalizeId("authSessions", sessionId);
     if (!session || !(await ctx.db.get(session))) throw new ConvexError("SESSION_ENDED");
@@ -74,7 +76,7 @@ export const issue = mutation({
       secretHash: await sha256Hex(secret),
       createdAt: Date.now(),
     });
-    return { keyId, secret };
+    return { keyId, secret, userId: user._id };
   },
 });
 
@@ -101,5 +103,28 @@ export const verify = internalMutation({
     if (!key || (await sha256Hex(secret)) !== key.secretHash) return null;
     await ctx.db.patch(key._id, { lastUsedAt: Date.now() });
     return key.userId;
+  },
+});
+
+/**
+ * End the caller's own session on the server ("Retirer ce téléphone",
+ * forgotten PIN), only if it is `expectedUserId`'s: unlike auth:signOut, a
+ * call held while offline can't end the session of the agent signed in when
+ * it is finally sent. Throws `AGENT_MISMATCH`.
+ */
+export const endSession = mutation({
+  args: { expectedUserId: v.string() },
+  handler: async (ctx, { expectedUserId }) => {
+    const user = await requireUser(ctx);
+    requireExpectedUser(user, expectedUserId);
+    const sessionId = await getAuthSessionId(ctx);
+    const session = sessionId && ctx.db.normalizeId("authSessions", sessionId);
+    if (!session || !(await ctx.db.get(session))) return;
+    const tokens = await ctx.db
+      .query("authRefreshTokens")
+      .withIndex("sessionId", (q) => q.eq("sessionId", session))
+      .collect();
+    await Promise.all(tokens.map((t) => ctx.db.delete(t._id)));
+    await ctx.db.delete(session);
   },
 });
