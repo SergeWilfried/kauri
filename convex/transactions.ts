@@ -7,7 +7,7 @@ import { authz } from "./authz";
 import { cleanFix } from "./devices";
 import { scheduleLedgerPost } from "./ledger";
 import { geoFix } from "./schema";
-import { assignedDevice, requireUser } from "./users";
+import { assignedDevice, requireExpectedUser, requireUser } from "./users";
 
 export const MAX_AMOUNT = 100_000_000; // sanity cap, in the branch currency
 /**
@@ -46,6 +46,8 @@ const movementArgs = {
   // for the audit: the server's own `timestamp` stays authoritative)
   recordedAt: v.optional(v.number()),
   location: v.optional(geoFix),
+  // The agent who recorded it on the TPE (see requireExpectedUser)
+  expectedAgentId: v.optional(v.string()),
 };
 
 /**
@@ -65,9 +67,11 @@ async function recordMovement(
     offline?: boolean;
     recordedAt?: number;
     location?: Infer<typeof geoFix>;
+    expectedAgentId?: string;
   },
 ) {
   const agent = await requireUser(ctx);
+  requireExpectedUser(agent, args.expectedAgentId);
   const permission = type === "deposit" ? "transactions:collect" : "transactions:withdraw";
   if (!(await authz.can(ctx, agent._id, permission))) {
     throw new ConvexError("FORBIDDEN");
@@ -152,7 +156,8 @@ async function recordMovement(
  * replays. Throws `INVALID_AMOUNT`, `CUSTOMER_NOT_FOUND` (unknown or another
  * branch's), `NO_DEVICE` (no active bound TPE), `DAY_CLOSED` (today's cash
  * already reconciled), `DUPLICATE_CLIENT_ID` (UUID used by another agent or
- * for a withdrawal) or `FORBIDDEN`.
+ * for a withdrawal), `FORBIDDEN`, or `AGENT_MISMATCH` when `expectedAgentId`
+ * is not the caller.
  */
 export const createDeposit = mutation({
   args: movementArgs,
