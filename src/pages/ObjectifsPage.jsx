@@ -1,75 +1,159 @@
-import { useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import { useMutation, useQuery } from 'convex/react'
+import { api } from '../../convex/_generated/api'
 import { I } from '../icons'
-import { fmt, KPI, PageHeader, SearchInput } from '../components'
-import { CLIENTS } from '../data'
+import { downloadCsv, errorMessage, fmt, initials, SortHead, keyActivate, KPI, PageHeader, PageSkeleton, SearchInput } from '../components'
+import { Pager, usePaged } from '../components/Pager'
 import Novu from '../components/Inbox'
+import { useDialog } from '../components/useDialog'
+import { confirmDialog } from '../components/ConfirmDialog'
 
 const OBJ_STATUSES = {
-  atteint:   { label: "Atteint",       tagClass: "actif",   dot: "var(--pos)" },
-  enavance:  { label: "En avance",     tagClass: "actif",   dot: "var(--pos)" },
-  surrythme: { label: "Sur le rythme", tagClass: "attente", dot: "var(--warn)" },
-  enretard:  { label: "En retard",     tagClass: "archive", dot: "var(--neg)" },
-  enpause:   { label: "En pause",      tagClass: "archive", dot: "oklch(0.7 0.02 70)" },
+  atteint:   { label: "Atteint",       dot: "var(--pos)" },
+  enavance:  { label: "En avance",     dot: "var(--pos)" },
+  surrythme: { label: "Sur le rythme", dot: "var(--warn)" },
+  encours:   { label: "En cours",      dot: "var(--brand)" },
+  enretard:  { label: "En retard",     dot: "var(--neg)" },
+  enpause:   { label: "En pause",      dot: "oklch(0.7 0.02 70)" },
 }
 
-function buildObjectifs() {
-  const base = CLIENTS.filter(c => c.status !== "attente").map((c, i) => {
-    const pct      = Math.round((c.balance / c.goal) * 100)
-    const days     = [62, 38, 91, 14, 27, 120, 9, 48][i] || 30
-    const cat      = ["Pèlerinage", "Scolarité", "Mariage", "Logement", "Tontine", "Soudure agricole", "Logement", "Scolarité"][i] || "Tontine"
-    const deadline = ["1 juil. 2026", "12 juin 2026", "5 août 2026", "19 mai 2026", "1 juin 2026", "2 sept. 2026", "14 mai 2026", "22 juin 2026"][i] || "—"
-    const status   =
-      pct >= 100        ? "atteint"   :
-      days < 21 && pct < 80 ? "enretard"  :
-      pct >= 80         ? "enavance"  :
-                          "surrythme"
-    return {
-      id: 10 + c.id, client: c.name, initials: c.initials, phone: c.phone,
-      agent: c.agent, village: c.village, product: c.product,
-      category: cat, target: c.goal, current: c.balance, monthly: c.monthlyAvg,
-      pct, daysLeft: days, deadline, created: c.joined, status,
-    }
-  })
-  base.push({
-    id: 30, client: "Adèle Sawadogo", initials: "AS", phone: "+226 70 99 11 22",
-    agent: "K. Djibril", village: "Bobo-Dioulasso", product: "Plan+",
-    category: "Mariage", target: 300000, current: 312000, monthly: 28000,
-    pct: 104, daysLeft: 0, deadline: "Atteint le 28 avr.", created: "2024-05-01", status: "atteint",
-  })
-  base.push({
-    id: 31, client: "Yacouba Compaoré", initials: "YC", phone: "+226 76 12 89 04",
-    agent: "A. Ouédraogo", village: "Hounde", product: "Carnet",
-    category: "Logement", target: 500000, current: 95000, monthly: 0,
-    pct: 19, daysLeft: 220, deadline: "12 déc. 2026", created: "2025-09-12", status: "enpause",
-  })
-  return base
+// Reasons offered when setting a goal; anything else typed is kept as is
+const CATEGORY_COLORS = {
+  "Scolarité":        "oklch(0.6 0.13 230)",
+  "Logement":         "var(--brand)",
+  "Pèlerinage":       "oklch(0.55 0.13 280)",
+  "Mariage":          "oklch(0.6 0.13 340)",
+  "Soudure agricole": "oklch(0.6 0.13 130)",
+  "Commerce":         "oklch(0.62 0.12 60)",
+  "Santé":            "oklch(0.6 0.12 190)",
+  "Tontine":          "oklch(0.65 0.06 70)",
 }
+const CATEGORIES = Object.keys(CATEGORY_COLORS)
+const NO_CATEGORY = "Sans motif"
+const YEAR = 365 * 86_400_000
 
-const OBJECTIFS = buildObjectifs()
-
-const OBJ_KPIS = [
-  { label: "Objectifs actifs",   value: String(OBJECTIFS.filter(o => o.status !== "atteint").length), unit: "",  delta: "+3",    dir: "up", note: "ce mois",         icon: "users" },
-  { label: "Épargne cumulée",    value: fmt(OBJECTIFS.reduce((s, o) => s + o.current, 0)),             unit: "FCFA", delta: "+6,1%", dir: "up", note: "vs. avr.",   icon: "wallet" },
-  { label: "Atteints (12 mois)", value: "37",                                                           unit: "",  delta: "+5",    dir: "up", note: "vs. 2025",        icon: "coin" },
-  { label: "Taux moy. d'atteinte", value: "68",                                                         unit: "%", delta: "+4 pts", dir: "up", note: "objectifs actifs", icon: "receipt" },
-]
-
-const CATEGORIES = [
-  { name: "Scolarité",        count: 42, sum: 1820000, color: "oklch(0.6 0.13 230)" },
-  { name: "Logement",         count: 18, sum: 2640000, color: "var(--brand)" },
-  { name: "Pèlerinage",       count: 11, sum: 1490000, color: "oklch(0.55 0.13 280)" },
-  { name: "Mariage",          count: 14, sum: 1180000, color: "oklch(0.6 0.13 340)" },
-  { name: "Soudure agricole", count: 23, sum: 760000,  color: "oklch(0.6 0.13 130)" },
-  { name: "Tontine",          count: 34, sum: 920000,  color: "oklch(0.65 0.06 70)" },
-]
-
+/** Colour of a goal category. */
 function catColor(name) {
-  return (CATEGORIES.find(c => c.name === name) || {}).color || "var(--ink-3)"
+  return CATEGORY_COLORS[name] || "var(--ink-3)"
 }
 
+/** Display metadata for a goal's status. */
 function statusOf(o) { return OBJ_STATUSES[o.status] }
 
-function SpotlightCard({ o }) {
+const fmtDate = (ts) => new Date(ts).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })
+
+/** Deadline as typed in a date input (yyyy-mm-dd), local time. */
+const toInputDate = (ts) => {
+  if (!ts) return ""
+  const d = new Date(ts)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+}
+
+/** Create or edit a client's goal: target, reason and deadline. */
+function GoalEditor({ goal, candidates, onClose }) {
+  const isNew = !goal
+  const setGoal = useMutation(api.portfolio.setGoal)
+  const removeGoal = useMutation(api.portfolio.removeGoal)
+  const [customerId, setCustomerId] = useState(goal?.id ?? "")
+  const [target, setTarget] = useState(goal ? String(goal.target) : "")
+  const [category, setCategory] = useState(goal?.category ?? "")
+  const [deadline, setDeadline] = useState(toInputDate(goal?.deadline))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const ref = useDialog(onClose)
+
+  const run = async (fn) => {
+    setBusy(true)
+    setError("")
+    try { await fn(); onClose() } catch (e) { setError(errorMessage(e)) } finally { setBusy(false) }
+  }
+  const save = () => {
+    const amount = parseInt(target.replace(/\s/g, ""), 10)
+    if (!customerId) return setError("Choisissez un client.")
+    if (!amount || amount <= 0) return setError("Indiquez le montant à atteindre.")
+    run(() => setGoal({
+      customerId,
+      target: amount,
+      category: category.trim() || null,
+      // End of the chosen day, local time
+      deadline: deadline ? new Date(deadline + "T23:59:59").getTime() : null,
+    }))
+  }
+
+  return (
+    <>
+      <div className="drawer-scrim" onClick={onClose}/>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label={isNew ? "Nouvel objectif" : `Objectif de ${goal.client}`} ref={ref} tabIndex={-1}>
+        <div className="drawer-head">
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{isNew ? "Nouvel objectif" : goal.client}</div>
+            <div className="cell-sub">
+              {isNew ? "Fixer un objectif d'épargne à un client" : `Épargne actuelle : ${fmt(goal.current)} FCFA`}
+            </div>
+          </div>
+          <button className="btn ghost sm" onClick={onClose} style={{ padding: 6 }} aria-label="Fermer">✕</button>
+        </div>
+        <div className="drawer-body">
+          {isNew && (
+            <label className="field">
+              <span className="field-label">Client</span>
+              <select className="input" value={customerId} onChange={e => setCustomerId(e.target.value)}>
+                <option value="">Choisir un client…</option>
+                {candidates.map(c => <option key={c.id} value={c.id}>{c.name} · {c.phone}</option>)}
+              </select>
+              {candidates.length === 0 && <div className="cell-sub" style={{ marginTop: 4 }}>Tous les clients de l'agence ont déjà un objectif.</div>}
+            </label>
+          )}
+          <label className="field">
+            <span className="field-label">Montant à atteindre (FCFA)</span>
+            <input className="input" inputMode="numeric" value={target} placeholder="Ex : 250000"
+                   onChange={e => setTarget(e.target.value.replace(/[^\d\s]/g, ""))}/>
+          </label>
+          <label className="field">
+            <span className="field-label">Motif</span>
+            <input className="input" list="goal-categories" value={category} maxLength={40}
+                   placeholder="Scolarité, Logement…" onChange={e => setCategory(e.target.value)}/>
+            <datalist id="goal-categories">
+              {CATEGORIES.map(c => <option key={c} value={c}/>)}
+            </datalist>
+          </label>
+          <label className="field">
+            <span className="field-label">Échéance (facultatif)</span>
+            <input className="input" type="date" value={deadline} min={toInputDate(Date.now())}
+                   onChange={e => setDeadline(e.target.value)}/>
+            <div className="cell-sub" style={{ marginTop: 4 }}>
+              Sans échéance, le statut reste « En cours » : il n'y a pas de rythme à comparer.
+            </div>
+          </label>
+          {error && <div role="alert" style={{ color: "var(--neg)", fontSize: 12.5 }}>{error}</div>}
+        </div>
+        <div className="drawer-foot">
+          <button className="btn brand" disabled={busy} onClick={save}>
+            <I.Check size={14} stroke="white"/>{isNew ? "Créer l'objectif" : "Enregistrer"}
+          </button>
+          <button className="btn" onClick={onClose}>Annuler</button>
+          {!isNew && (
+            <button className="btn ghost sm" style={{ marginLeft: "auto", color: "var(--neg)" }} disabled={busy}
+                    onClick={async () => {
+                      const ok = await confirmDialog({
+                        title: `Supprimer l'objectif de ${goal.client} ?`,
+                        message: "L'épargne déjà versée reste sur le compte du client.",
+                        confirmLabel: "Supprimer",
+                        danger: true,
+                      })
+                      if (ok) run(() => removeGoal({ customerId: goal.id }))
+                    }}>
+              Supprimer
+            </button>
+          )}
+        </div>
+      </aside>
+    </>
+  )
+}
+
+/** Highlighted goal with remaining amount and months to completion. */
+function SpotlightCard({ o, onOpen }) {
   if (!o) return null
   const reste = Math.max(0, o.target - o.current)
   const monthsNeeded = o.monthly > 0 ? Math.ceil(reste / o.monthly) : "—"
@@ -80,14 +164,16 @@ function SpotlightCard({ o }) {
           <div className="card-title">Le plus proche du palier</div>
           <div className="card-sub">Objectif client à mettre en avant cette semaine</div>
         </div>
-        <span className="card-action">Voir la fiche <I.Arrow size={12}/></span>
+        <button className="card-action" style={{ border: 0, background: "none", cursor: "pointer" }} onClick={onOpen}>
+          Voir l'objectif <I.Arrow size={12}/>
+        </button>
       </div>
       <div className="spotlight-body">
         <div className="spotlight-head">
-          <div className="avatar lg">{o.initials}</div>
+          <div className="avatar lg">{initials(o.client)}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 16, letterSpacing: "-0.015em" }}>{o.client}</div>
-            <div className="cell-sub">{o.category} · {o.product} · {o.agent}</div>
+            <div className="cell-sub">{[o.category ?? NO_CATEGORY, o.product, o.agent].filter(Boolean).join(" · ")}</div>
           </div>
           <span className="status-chip" data-status={o.status}>
             <span className="status-chip-dot" style={{ background: statusOf(o).dot }}/>
@@ -120,7 +206,7 @@ function SpotlightCard({ o }) {
           </div>
           <div>
             <div className="cell-sub">Échéance</div>
-            <div className="ssv" style={{ fontSize: 14 }}>{o.deadline}</div>
+            <div className="ssv" style={{ fontSize: 14 }}>{o.deadline ? fmtDate(o.deadline) : "—"}</div>
           </div>
         </div>
       </div>
@@ -128,6 +214,7 @@ function SpotlightCard({ o }) {
   )
 }
 
+/** Goal count per category. */
 function CategoriesCard({ cats }) {
   const total = cats.reduce((s, c) => s + c.count, 0)
   return (
@@ -135,10 +222,10 @@ function CategoriesCard({ cats }) {
       <div className="card-head">
         <div>
           <div className="card-title">Répartition par motif</div>
-          <div className="card-sub">{total} objectifs sur le portefeuille</div>
+          <div className="card-sub">{total} objectif{total > 1 ? "s" : ""} dans l'agence</div>
         </div>
-        <span className="card-action">Détails <I.Arrow size={12}/></span>
       </div>
+      {total === 0 && <div className="cell-sub" style={{ padding: "8px 16px 16px" }}>Aucun objectif pour l'instant.</div>}
       <div style={{ padding: "4px 16px 8px" }}>
         <div className="cat-bar">
           {cats.map(c => (
@@ -160,91 +247,135 @@ function CategoriesCard({ cats }) {
   )
 }
 
+/** Savings goals of the branch's clients: progress, pace and status, editable by portfolio managers. */
 export default function ObjectifsPage() {
+  const data = useQuery(api.portfolio.listGoals)
+  const me = useQuery(api.users.me)
+  const canEdit = !!me?.can?.managePortfolio
   const [q, setQ] = useState("")
   const [seg, setSeg] = useState("tous")
   const [cat, setCat] = useState("toutes")
   const [agent, setAgent] = useState("tous")
   const [sortBy, setSortBy] = useState("pct")
   const [sortDir, setSortDir] = useState("desc")
-  const [online, setOnline] = useState(true)
-  
-  const agents = useMemo(() => ["tous",    ...Array.from(new Set(OBJECTIFS.map(o => o.agent)))],    [])
-  const cats   = useMemo(() => ["toutes",  ...Array.from(new Set(OBJECTIFS.map(o => o.category)))], [])
+  const [editor, setEditor] = useState(null) // { goal } — goal null for a new one
+
+  const goals = useMemo(() => data?.goals ?? [], [data])
+  const agents = useMemo(() => ["tous", ...new Set(goals.map(o => o.agent))], [goals])
+  const cats   = useMemo(() => ["toutes", ...new Set(goals.map(o => o.category ?? NO_CATEGORY))], [goals])
 
   const filtered = useMemo(() => {
-    let r = OBJECTIFS.filter(o => {
+    const needle = q.trim().toLowerCase()
+    const r = goals.filter(o => {
       if (seg === "encours"  && (o.status === "atteint" || o.status === "enpause")) return false
       if (seg === "atteints" && o.status !== "atteint")  return false
       if (seg === "enretard" && o.status !== "enretard") return false
       if (seg === "enpause"  && o.status !== "enpause")  return false
-      if (cat !== "toutes"   && o.category !== cat)      return false
+      if (cat !== "toutes"   && (o.category ?? NO_CATEGORY) !== cat) return false
       if (agent !== "tous"   && o.agent !== agent)       return false
-      if (q && !o.client.toLowerCase().includes(q.toLowerCase()) && !o.category.toLowerCase().includes(q.toLowerCase())) return false
+      if (needle && !o.client.toLowerCase().includes(needle) && !(o.category ?? "").toLowerCase().includes(needle)) return false
       return true
     })
+    // No deadline sorts last either way
+    const key = (o) => sortBy === "daysLeft" ? (o.daysLeft ?? (sortDir === "asc" ? Infinity : -Infinity)) : o[sortBy] ?? ""
     r.sort((a, b) => {
-      const va = a[sortBy], vb = b[sortBy]
+      const va = key(a), vb = key(b)
       const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb), "fr")
       return sortDir === "asc" ? cmp : -cmp
     })
     return r
-  }, [q, seg, cat, agent, sortBy, sortDir])
+  }, [goals, q, seg, cat, agent, sortBy, sortDir])
+  const paged = usePaged(filtered)
 
   const counts = {
-    tous:     OBJECTIFS.length,
-    encours:  OBJECTIFS.filter(o => o.status !== "atteint" && o.status !== "enpause").length,
-    atteints: OBJECTIFS.filter(o => o.status === "atteint").length,
-    enretard: OBJECTIFS.filter(o => o.status === "enretard").length,
-    enpause:  OBJECTIFS.filter(o => o.status === "enpause").length,
+    tous:     goals.length,
+    encours:  goals.filter(o => o.status !== "atteint" && o.status !== "enpause").length,
+    atteints: goals.filter(o => o.status === "atteint").length,
+    enretard: goals.filter(o => o.status === "enretard").length,
+    enpause:  goals.filter(o => o.status === "enpause").length,
   }
+
+  const categories = useMemo(() => {
+    const m = new Map()
+    for (const o of goals) {
+      const name = o.category ?? NO_CATEGORY
+      const c = m.get(name) ?? { name, count: 0, sum: 0, color: catColor(name) }
+      c.count += 1
+      c.sum += Math.max(0, o.current)
+      m.set(name, c)
+    }
+    return [...m.values()].sort((a, b) => b.count - a.count)
+  }, [goals])
+
+  const kpis = useMemo(() => {
+    const open = goals.filter(o => o.status !== "atteint")
+    const now = Date.now()
+    const avg = open.length ? Math.round(open.reduce((s, o) => s + Math.min(100, o.pct), 0) / open.length) : 0
+    return [
+      { label: "Objectifs en cours",   value: String(open.length), unit: "", note: `${goals.length} clients avec un objectif`, icon: "users" },
+      { label: "Épargne vers objectifs", value: fmt(open.reduce((s, o) => s + Math.max(0, o.current), 0)), unit: "FCFA",
+        note: `sur ${fmt(open.reduce((s, o) => s + o.target, 0))} FCFA visés`, icon: "wallet" },
+      { label: "Atteints (12 mois)",   value: String(goals.filter(o => o.reachedAt && o.reachedAt >= now - YEAR).length), unit: "", note: "objectifs franchis", icon: "coin" },
+      { label: "Progression moyenne",  value: String(avg), unit: "%", note: "objectifs en cours", icon: "receipt" },
+    ]
+  }, [goals])
+
+  const spotlight = useMemo(() =>
+    goals
+      .filter(o => o.status !== "atteint" && o.status !== "enpause")
+      .sort((a, b) => b.pct - a.pct)[0]
+  , [goals])
 
   const toggleSort = (col) => {
     if (sortBy === col) setSortDir(d => d === "asc" ? "desc" : "asc")
     else { setSortBy(col); setSortDir("desc") }
   }
-  const SortHead = ({ col, children, align }) => (
-    <th onClick={() => toggleSort(col)} style={{ textAlign: align || "left", cursor: "pointer", userSelect: "none" }}>
-      <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
-        {children}
-        <span style={{ opacity: sortBy === col ? 1 : 0.25, fontSize: 9 }}>
-          {sortBy === col ? (sortDir === "asc" ? "▲" : "▼") : "▾"}
-        </span>
-      </span>
-    </th>
+  const sort = { sortBy, sortDir, onSort: toggleSort }
+
+  const exportCsv = () => downloadCsv(
+    `objectifs-${toInputDate(Date.now())}.csv`,
+    ["Client", "Téléphone", "Agent", "Motif", "Objectif (FCFA)", "Épargne (FCFA)", "Progression (%)", "Cadence 30 j (FCFA)", "Échéance", "Statut"],
+    filtered.map(o => [o.client, o.phone, o.agent, o.category ?? "", o.target, o.current, o.pct, o.monthly,
+      o.deadline ? toInputDate(o.deadline) : "", statusOf(o).label]),
   )
 
-  const spotlight = useMemo(() =>
-    [...OBJECTIFS]
-      .filter(o => o.status !== "atteint" && o.status !== "enpause")
-      .sort((a, b) => b.pct - a.pct)[0]
-  , [])
+  if (data === undefined) {
+    return (
+      <div className="objectifs-page">
+        <PageHeader crumbs={["Objectifs"]} title="Objectifs d'épargne"><Novu /></PageHeader>
+        <PageSkeleton />
+      </div>
+    )
+  }
 
   return (
     <div className="objectifs-page">
       <PageHeader
         crumbs={["Objectifs"]}
         title="Objectifs d'épargne"
-        sub={`${counts.tous} objectifs · ${counts.encours} en cours · ${counts.atteints} atteints sur 12 mois`}
       >
-          <button className={"status-pill" + (online ? "" : " offline")} onClick={() => setOnline(!online)}>
-          <span className="status-dot"></span>{online ? "En ligne · synchronisé" : "Hors ligne · 4 en file"}
-        </button>
         <Novu />
       </PageHeader>
 
       <section className="kpi-row">
-        {OBJ_KPIS.map(k => <KPI key={k.label} k={k}/>)}
+        {kpis.map(k => <KPI key={k.label} k={k}/>)}
       </section>
 
       <section className="row obj-row" style={{ marginBottom: 14 }}>
-        <SpotlightCard o={spotlight} />
-        <CategoriesCard cats={CATEGORIES} />
+        {spotlight
+          ? <SpotlightCard o={spotlight} onOpen={() => canEdit && setEditor({ goal: spotlight })} />
+          : <div className="card" style={{ padding: 24, color: "var(--ink-3)", fontSize: 13 }}>Aucun objectif en cours à mettre en avant.</div>}
+        <CategoriesCard cats={categories} />
       </section>
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <button className="btn"><I.Export size={14}/>Exporter</button>
-        <button className="btn brand"><I.Plus size={14} stroke="white"/>Nouvel objectif</button>
-        </div>
+        <SearchInput placeholder="Client ou motif…" value={q} onChange={e => setQ(e.target.value)} />
+        <button className="btn" onClick={exportCsv} disabled={filtered.length === 0}><I.Export size={14}/>Exporter</button>
+        {canEdit && (
+          <button className="btn brand" onClick={() => setEditor({ goal: null })}>
+            <I.Plus size={14} stroke="white"/>Nouvel objectif
+          </button>
+        )}
+      </div>
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="filter-bar">
           <div className="seg-tabs">
@@ -255,59 +386,62 @@ export default function ObjectifsPage() {
               { k: "enretard", label: "En retard",  n: counts.enretard },
               { k: "enpause",  label: "En pause",   n: counts.enpause },
             ].map(t => (
-              <button key={t.k} className={"seg-tab " + (seg === t.k ? "on" : "")} onClick={() => setSeg(t.k)}>
+              <button key={t.k} aria-pressed={seg === t.k} className={"seg-tab " + (seg === t.k ? "on" : "")} onClick={() => setSeg(t.k)}>
                 {t.label}<span className="seg-count">{t.n}</span>
               </button>
             ))}
           </div>
           <div className="filter-spacer"/>
-          <div className="filter-group">
-            <label className="filter-label">Catégorie</label>
+          <label className="filter-group">
+            <span className="filter-label">Motif</span>
             <select className="filter-select" value={cat} onChange={e => setCat(e.target.value)}>
-              {cats.map(a => <option key={a} value={a}>{a === "toutes" ? "Toutes" : a}</option>)}
+              {cats.map(a => <option key={a} value={a}>{a === "toutes" ? "Tous" : a}</option>)}
             </select>
-          </div>
-          <div className="filter-group">
-            <label className="filter-label">Agent</label>
+          </label>
+          <label className="filter-group">
+            <span className="filter-label">Agent</span>
             <select className="filter-select" value={agent} onChange={e => setAgent(e.target.value)}>
               {agents.map(a => <option key={a} value={a}>{a === "tous" ? "Tous les agents" : a}</option>)}
             </select>
-          </div>
+          </label>
         </div>
 
         <div className="table-wrap">
           <table className="data-table obj-table">
             <thead>
               <tr>
-                <SortHead col="client">Client</SortHead>
-                <SortHead col="category">Catégorie</SortHead>
+                <SortHead {...sort} col="client">Client</SortHead>
+                <SortHead {...sort} col="category">Motif</SortHead>
                 <th style={{ width: "26%" }}>Progression</th>
-                <SortHead col="current" align="right">Épargne</SortHead>
-                <SortHead col="monthly" align="right">Cadence / mois</SortHead>
-                <SortHead col="daysLeft">Échéance</SortHead>
-                <SortHead col="status">Statut</SortHead>
+                <SortHead {...sort} col="current" align="right">Épargne</SortHead>
+                <SortHead {...sort} col="monthly" align="right">Cadence 30 j</SortHead>
+                <SortHead {...sort} col="daysLeft">Échéance</SortHead>
+                <SortHead {...sort} col="status">Statut</SortHead>
                 <th style={{ width: 30 }}></th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(o => {
+              {paged.rows.map(o => {
                 const st = statusOf(o)
                 return (
-                  <tr key={o.id}>
+                  <tr key={o.id} style={{ cursor: canEdit ? "pointer" : undefined }}
+                      {...(canEdit ? keyActivate(() => setEditor({ goal: o })) : {})}>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div className="avatar sm">{o.initials}</div>
+                        <div className="avatar sm">{initials(o.client)}</div>
                         <div>
                           <div style={{ fontWeight: 550 }}>{o.client}</div>
-                          <div className="cell-sub">{o.agent} · {o.village}</div>
+                          <div className="cell-sub">{o.agent}{o.product ? ` · ${o.product}` : ""}</div>
                         </div>
                       </div>
                     </td>
                     <td>
-                      <span className="chip cat-chip" data-cat={o.category}>
-                        <span className="cat-dot" style={{ background: catColor(o.category) }}/>
-                        {o.category}
-                      </span>
+                      {o.category ? (
+                        <span className="chip cat-chip">
+                          <span className="cat-dot" style={{ background: catColor(o.category) }}/>
+                          {o.category}
+                        </span>
+                      ) : <span className="cell-sub">—</span>}
                     </td>
                     <td>
                       <div className="prog-cell">
@@ -336,13 +470,15 @@ export default function ObjectifsPage() {
                     </td>
                     <td>
                       {o.status === "atteint" ? (
-                        <span className="cell-sub">{o.deadline}</span>
+                        <span className="cell-sub">{o.reachedAt ? `Atteint le ${fmtDate(o.reachedAt)}` : "Atteint"}</span>
+                      ) : o.deadline === null ? (
+                        <span className="cell-sub">—</span>
                       ) : (
                         <div style={{ lineHeight: 1.25 }}>
                           <div style={{ fontWeight: 500, fontSize: 13 }}>
-                            {o.daysLeft > 0 ? `${o.daysLeft} j` : "Aujourd'hui"}
+                            {o.daysLeft > 0 ? `${o.daysLeft} j` : o.daysLeft === 0 ? "Aujourd'hui" : "Dépassée"}
                           </div>
-                          <div className="cell-sub">{o.deadline}</div>
+                          <div className="cell-sub">{fmtDate(o.deadline)}</div>
                         </div>
                       )}
                     </td>
@@ -352,7 +488,7 @@ export default function ObjectifsPage() {
                         {st.label}
                       </span>
                     </td>
-                    <td><button className="btn ghost sm" style={{ padding: 4 }}><I.Arrow size={12}/></button></td>
+                    <td>{canEdit && <span className="btn ghost sm" style={{ padding: 4 }}><I.Arrow size={12}/></span>}</td>
                   </tr>
                 )
               })}
@@ -360,20 +496,18 @@ export default function ObjectifsPage() {
           </table>
           {filtered.length === 0 && (
             <div style={{ padding: 40, textAlign: "center", color: "var(--ink-3)", fontSize: 13 }}>
-              Aucun objectif ne correspond aux filtres.
+              {goals.length === 0
+                ? "Aucun client n'a encore d'objectif. Les agents le fixent à l'inscription dans l'application, ou utilisez « Nouvel objectif »."
+                : "Aucun objectif ne correspond aux filtres."}
             </div>
           )}
-          <div className="table-foot">
-            <span>Affichage de {filtered.length} sur {OBJECTIFS.length} objectifs</span>
-            <div className="pager">
-              <button className="btn ghost sm" disabled>‹ Précédent</button>
-              <span className="page-num on">1</span>
-              <span className="page-num">2</span>
-              <button className="btn ghost sm">Suivant ›</button>
-            </div>
-          </div>
+          <Pager paged={paged} unit="objectifs" />
         </div>
       </div>
+
+      {editor && (
+        <GoalEditor goal={editor.goal} candidates={data.withoutGoal} onClose={() => setEditor(null)} />
+      )}
     </div>
   )
 }

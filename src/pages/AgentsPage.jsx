@@ -1,144 +1,365 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
+import { useQuery, useMutation } from 'convex/react'
+import { api } from '../../convex/_generated/api'
 import { I } from '../icons'
-import { fmt, PageHeader } from '../components'
+import { errorMessage, fmt, fmtDuration, initials, mapUrl, relTime, KpiSkeleton, TableSkeleton, PageHeader, SearchInput } from '../components'
+import { Pager, usePaged } from '../components/Pager'
 import Novu from '../components/Inbox'
-
-const AGENTS = [
-  { id: 1, initials: "KD", name: "Konaté Djibril",    role: "Administrateur", branch: "Bobo-Dioulasso", clients: 58, collected: 1840000, target: 2000000, status: "en ligne",   last: "il y a 2 min",  phone: "+226 70 00 11 22", txMonth: 142, device: { id: "TPE-014", model: "PAX A920", battery: 86, signal: 4, sync: "à jour",       queued: 0,  lastSync: "il y a 1 min", area: "Centre-ville" } },
-  { id: 2, initials: "AO", name: "Aïssata Ouédraogo", role: "Agent terrain",  branch: "Banfora",        clients: 42, collected: 1120000, target: 1400000, status: "en ligne",   last: "il y a 5 min",  phone: "+226 76 11 22 33", txMonth: 98,  device: { id: "TPE-021", model: "PAX A920", battery: 62, signal: 3, sync: "à jour",       queued: 0,  lastSync: "il y a 4 min", area: "Marché Banfora" } },
-  { id: 3, initials: "MS", name: "Moustapha Sanou",   role: "Agent terrain",  branch: "Hounde",         clients: 31, collected: 720000,  target: 1000000, status: "hors ligne", last: "il y a 1 h",    phone: "+226 78 22 33 44", txMonth: 64,  device: { id: "TPE-009", model: "Sunmi P2",  battery: 24, signal: 0, sync: "en file",      queued: 12, lastSync: "il y a 1 h",   area: "Hounde Sud" } },
-  { id: 4, initials: "FB", name: "Fatim Barry",       role: "Caissière",      branch: "Bobo-Dioulasso", clients: 0,  collected: 980000,  target: 1200000, status: "en ligne",   last: "il y a 12 min", phone: "+226 71 33 44 55", txMonth: 187, device: { id: "TPE-002", model: "PAX S920",  battery: 95, signal: 5, sync: "à jour",       queued: 0,  lastSync: "il y a 2 min", area: "Agence Bobo" } },
-  { id: 5, initials: "OZ", name: "Oumar Zida",        role: "Agent terrain",  branch: "Banfora",        clients: 27, collected: 540000,  target: 800000,  status: "congé",      last: "hier",          phone: "+226 65 44 55 66", txMonth: 41,  device: { id: "TPE-018", model: "Sunmi P2",  battery: 0,  signal: 0, sync: "hors service", queued: 0,  lastSync: "hier",          area: "—" } },
-  { id: 6, initials: "BK", name: "Bintou Kaboré",     role: "Superviseure",   branch: "Bobo-Dioulasso", clients: 0,  collected: 0,       target: 0,       status: "en ligne",   last: "il y a 8 min",  phone: "+226 70 55 66 77", txMonth: 0,   device: { id: "TPE-001", model: "PAX A920", battery: 71, signal: 4, sync: "à jour",       queued: 0,  lastSync: "il y a 3 min", area: "Agence Bobo" } },
-]
-
-const AGENT_KPIS = [
-  { label: "TPE en service",    value: "4",         unit: "/6 actifs", note: "1 hors-ligne · 1 batt. faible", icon: "users",   delta: "+1",  dir: "up" },
-  { label: "Collecte du mois",  value: "5 200 000", unit: "FCFA",      note: "81% de l'objectif",             icon: "wallet",  delta: "81%", dir: "up" },
-  { label: "Tx en file (sync)", value: "12",        unit: "",          note: "TPE-009 · Hounde",              icon: "cloud",   delta: "−4",  dir: "up" },
-  { label: "Tx / agent · moy.", value: "88",        unit: "",          note: "ce mois",                       icon: "receipt", delta: "+6",  dir: "up" },
-]
+import { NewStaffDrawer, StaffDrawer } from '../components/StaffDrawers'
+import { ImportButton } from '../components/ImportDialog'
+import { DropdownMenu } from '../components/Menu'
+import { confirmDialog } from '../components/ConfirmDialog'
 
 const ROLE_TAGS = {
-  "Administrateur": { bg: "oklch(0.94 0.04 50)",  fg: "var(--brand-ink)" },
-  "Superviseure":   { bg: "oklch(0.94 0.05 270)", fg: "oklch(0.4 0.13 270)" },
-  "Agent terrain":  { bg: "var(--surface-inset)", fg: "var(--ink-2)" },
-  "Caissière":      { bg: "oklch(0.95 0.04 190)", fg: "oklch(0.4 0.1 190)" },
+  "Admin IT":      { bg: "oklch(0.94 0.04 50)",  fg: "var(--brand-ink)" },
+  "Superviseur":   { bg: "oklch(0.94 0.05 270)", fg: "oklch(0.4 0.13 270)" },
+  "Agent terrain": { bg: "var(--surface-inset)", fg: "var(--ink-2)" },
+  "Comptable":     { bg: "oklch(0.95 0.04 190)", fg: "oklch(0.4 0.1 190)" },
 }
 
 const STATUS_DOT = {
-  "en ligne":   "var(--pos)",
-  "hors ligne": "oklch(0.7 0.02 70)",
-  "congé":      "var(--warn)",
+  active:    "var(--pos)",
+  suspended: "var(--warn)",
+}
+const STATUS_LABEL = { active: "actif", suspended: "suspendu" }
+
+// Phones check in every ~15 min while the app is open (devices:heartbeat);
+// two missed check-ins and the TPE counts as offline.
+const DEVICE_STALE_MS = 35 * 60 * 1000
+
+// Phone clock this far from the server's: what it records offline is mis-dated
+const CLOCK_SKEW_ALERT_MS = 5 * 60 * 1000
+// Silent this long while holding unsynced operations: cash collected but not on the server
+const HELD_OPS_ALERT_MS = 4 * 3600 * 1000
+
+/** Signs of tampering or held cash from the last check-in, most serious first. */
+function deviceAlerts(d) {
+  const t = d.telemetry
+  if (!t || d.status !== "active") return []
+  const out = []
+  if (t.location?.mocked) out.push({ label: "Position simulée", title: "Une application de faux GPS est active sur le téléphone" })
+  if (t.rooted) out.push({ label: "Téléphone modifié", title: "Téléphone rooté : l'application et ses données peuvent être altérées" })
+  if (t.emulator) out.push({ label: "Émulateur", title: "L'application tourne sur un émulateur, pas sur un vrai téléphone" })
+  if (t.clockSkewMs !== undefined && Math.abs(t.clockSkewMs) > CLOCK_SKEW_ALERT_MS) {
+    out.push({
+      label: `Horloge ${t.clockSkewMs < 0 ? "en retard" : "en avance"} de ${fmtDuration(t.clockSkewMs)}`,
+      title: "L'heure du téléphone ne correspond pas à celle du serveur : les opérations hors ligne peuvent être mal datées",
+    })
+  }
+  const silent = Date.now() - d.lastSync
+  if (t.pendingOps > 0 && silent > HELD_OPS_ALERT_MS) {
+    out.push({
+      label: `${t.pendingOps} non synchronisée${t.pendingOps > 1 ? "s" : ""} depuis ${fmtDuration(silent)}`,
+      title: "Opérations encaissées sur le TPE mais pas encore reçues par le serveur",
+    })
+  }
+  if (t.locationDenied) out.push({ label: "Localisation refusée", title: "Les opérations de ce TPE ne sont pas géolocalisées" })
+  return out
 }
 
-function SignalBars({ level = 0 }) {
+/** The device's alerts as tags, or a dash. */
+function AlertsCell({ d }) {
+  const alerts = deviceAlerts(d)
+  if (alerts.length === 0) return <span className="cell-sub">—</span>
   return (
-    <span style={{ display: "inline-flex", alignItems: "flex-end", gap: 1.5, height: 12 }}>
-      {[1,2,3,4,5].map(i => (
-        <span key={i} style={{
-          width: 2.5,
-          height: 3 + i * 1.6,
-          borderRadius: 1,
-          background: i <= level ? "var(--ink-2)" : "var(--border-strong)",
-        }}/>
-      ))}
-    </span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+      {alerts.map(a => <span key={a.label} className="tag alerte" title={a.title}>{a.label}</span>)}
+    </div>
   )
 }
 
-function Battery({ pct = 100 }) {
-  const color = pct < 25 ? "var(--neg)" : pct < 50 ? "var(--warn)" : "var(--pos)"
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--ink-2)", fontVariantNumeric: "tabular-nums" }}>
-      <span style={{ position: "relative", width: 22, height: 11, border: "1.2px solid var(--border-strong)", borderRadius: 2.5 }}>
-        <span style={{
-          position: "absolute", left: 1, top: 1, bottom: 1,
-          width: `calc(${Math.max(0, Math.min(100, pct))}% - 2px)`,
-          background: color, borderRadius: 1.5,
-        }}/>
-        <span style={{ position: "absolute", right: -3, top: 3, bottom: 3, width: 2, background: "var(--border-strong)", borderRadius: "0 1px 1px 0" }}/>
-      </span>
-      {pct}%
-    </span>
-  )
-}
+const NETWORK_LABELS = { wifi: "Wi-Fi", cellular: "Données mobiles", none: "Hors réseau", other: "Réseau" }
 
+/** Device health tag: maintenance, lost, offline (no recent check-in) or online. */
 function SyncTag({ d }) {
-  if (d.sync === "à jour")  return <span className="tag actif">À jour</span>
-  if (d.sync === "en file") return <span className="tag attente">{d.queued} en file</span>
-  return <span className="tag archive">Hors service</span>
+  if (d.status === "maintenance") return <span className="tag attente">Maintenance</span>
+  if (d.status === "lost")        return <span className="tag archive">Perdu</span>
+  if (Date.now() - d.lastSync > DEVICE_STALE_MS) return <span className="tag attente">Hors ligne</span>
+  return <span className="tag actif">En ligne</span>
 }
 
+/** What the phone reported at its last check-in: battery, network, unsynced operations, app version. */
+function PhoneCell({ t }) {
+  if (!t) return <span className="cell-sub">Pas encore de rapport</span>
+  const pct = t.battery !== undefined ? Math.round(t.battery * 100) : null
+  const low = pct !== null && pct <= 20 && !t.charging
+  return (
+    <div style={{ lineHeight: 1.35 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12.5 }}>
+        {pct !== null && (
+          <span style={{ color: low ? "var(--neg)" : "var(--ink)", fontWeight: low ? 600 : 500, fontVariantNumeric: "tabular-nums" }}
+                title={t.charging ? "En charge" : "Sur batterie"}>
+            {t.charging ? "⚡" : "🔋"} {pct}%
+          </span>
+        )}
+        {t.network && <span style={{ color: t.network === "none" ? "var(--neg)" : "var(--ink-2)" }}>{NETWORK_LABELS[t.network]}</span>}
+        {t.pendingOps > 0 && (
+          <span style={{ color: "var(--warn-ink)", fontWeight: 600 }} title="Opérations enregistrées sur le téléphone, pas encore reçues par le serveur">
+            {t.pendingOps} en attente
+          </span>
+        )}
+      </div>
+      <div className="cell-sub">
+        {[t.appVersion && `App ${t.appVersion}`, t.osVersion && `Android ${t.osVersion}`].filter(Boolean).join(" · ") || "—"}
+        {t.location && <> · <a href={mapUrl(t.location)} target="_blank" rel="noreferrer">Position</a></>}
+      </div>
+    </div>
+  )
+}
+
+// Mirrors MAX_AGENTS_PER_DEVICE (convex/devices.ts): agents sharing one TPE
+const MAX_AGENTS_PER_DEVICE = 6
+
+/**
+ * One terminal row. The agents allowed on it (a TPE can be shared), who was
+ * signed in at the last check-in, and any binding request sit in "Affecté à";
+ * the Lier / Délier controls sit in the last, right-aligned column. The
+ * mutations enforce devices:bind.
+ */
+function FleetRow({ device, agents, canBind }) {
+  const bind   = useMutation(api.devices.bindDevice)
+  const unbind = useMutation(api.devices.unbindDevice)
+  const [busy, setBusy]     = useState(false)
+  const [error, setError]   = useState(null)
+
+  /** Run a binding operation and manage pending/error state. */
+  const run = async (fn) => {
+    setBusy(true); setError(null)
+    try { await fn() }
+    catch (e) { setError(errorMessage(e)) }
+    finally { setBusy(false) }
+  }
+
+  /** Ask for confirmation before removing one agent from the device. */
+  const onUnbind = async (agent) => {
+    const ok = await confirmDialog({
+      title: `Délier ${agent.name} de ${device.serial} ?`,
+      message: "Cet agent ne pourra plus encaisser avec ce TPE.",
+      confirmLabel: "Délier",
+      danger: true,
+    })
+    if (ok) run(() => unbind({ serialNumber: device.serial, userId: agent.id }))
+  }
+
+  const bound = device.agents ?? []
+  const full = bound.length >= MAX_AGENTS_PER_DEVICE
+  // Mirrors bindDevice: active field agents / supervisors without a terminal
+  const eligible = agents.filter(a => a.status === "active" && a.canCollect && !a.device)
+  // A phone registered this serial and waits for a binding (shown whatever
+  // the requester's state); `requester` is set only when they can be bound
+  const pending = !!device.requestedBy
+  const requester = canBind && pending && device.status === "active" && !full
+    ? eligible.find(a => a.id === device.requestedBy) ?? null
+    : null
+
+  let assignee
+  if (bound.length) {
+    assignee = (
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        {bound.map(a => (
+          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontWeight: 550 }}>{a.name}</span>
+            {device.inUseBy?.id === a.id && bound.length > 1 && (
+              <span className="tag actif" title="Agent connecté lors du dernier contact du téléphone">connecté</span>
+            )}
+          </div>
+        ))}
+        {bound.length > 1 && <span className="cell-sub">TPE partagé · {bound.length} agents</span>}
+      </div>
+    )
+  } else if (device.status !== "active") assignee = <span className="cell-sub">Non affecté · appareil indisponible</span>
+  else if (!pending) assignee = <span className="cell-sub">Non affecté</span>
+
+  // One "Gérer" menu: link agents (or add one to a shared TPE), unlink one.
+  // A pending phone request keeps its own button, it's the expected action.
+  const menuItems = []
+  if (canBind && device.status === "active") {
+    if (full) {
+      menuItems.push({ header: `${MAX_AGENTS_PER_DEVICE} agents au maximum sur ce TPE` })
+    } else {
+      menuItems.push({ header: bound.length ? "Ajouter un agent" : "Lier à un agent" })
+      if (eligible.length === 0) menuItems.push({ label: "Aucun agent disponible", disabled: true, onSelect: () => {} })
+      for (const a of eligible) {
+        menuItems.push({ label: a.name, onSelect: () => run(() => bind({ serialNumber: device.serial, userId: a.id })) })
+      }
+    }
+  }
+  if (canBind && bound.length) {
+    if (menuItems.length) menuItems.push({ separator: true })
+    menuItems.push({ header: "Délier" })
+    for (const a of bound) menuItems.push({ label: a.name, danger: true, onSelect: () => onUnbind(a) })
+  }
+
+  let actions = null
+  if (canBind && (requester || menuItems.length)) {
+    actions = <>
+      {requester && (
+        <button className="btn brand sm" disabled={busy}
+          onClick={() => run(() => bind({ serialNumber: device.serial, userId: requester.id }))}>Lier à {requester.name}</button>
+      )}
+      {menuItems.length > 0 && (
+        <DropdownMenu label="Gérer" items={menuItems} disabled={busy} ariaLabel={`Gérer les agents de ${device.serial}`} />
+      )}
+    </>
+  }
+
+  return (
+    <tr>
+      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 550 }}>{device.serial}</td>
+      <td>{device.model}</td>
+      <td>
+        {assignee}
+        {pending && (
+          <div style={{ marginTop: bound.length ? 6 : 0 }}>
+            <span className="tag attente">Demande de liaison · {device.requester ?? "agent inconnu"}</span>
+            <div className="cell-sub" style={{ marginTop: 2 }}>
+              {device.status !== "active"
+                ? "Appareil indisponible : remettez-le en service avant de le lier"
+                : full
+                  ? `Déjà ${MAX_AGENTS_PER_DEVICE} agents sur ce TPE : déliez-en un d'abord`
+                  : canBind && !requester
+                    ? "Cet agent ne peut pas être lié (suspendu, sans droit d'encaissement ou déjà équipé)"
+                    : `Téléphone enregistré ${relTime(device.requestedAt)} · vérifiez que le numéro affiché sur son écran est le même`}
+            </div>
+          </div>
+        )}
+        {canBind && device.boundBy && !pending && (
+          <div className="cell-sub" style={{ marginTop: 2 }}>
+            Modifié par {device.boundBy} · {relTime(device.boundAt)}
+          </div>
+        )}
+      </td>
+      <td style={{ whiteSpace: "nowrap" }}><SyncTag d={device}/></td>
+      <td><PhoneCell t={device.telemetry}/></td>
+      <td><AlertsCell d={device}/></td>
+      <td className="cell-sub">{relTime(device.lastSync)}</td>
+      <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>{actions}</div>
+        {error && <div role="alert" style={{ color: "var(--neg)", fontSize: 11.5, marginTop: 4 }}>{String(error)}</div>}
+      </td>
+    </tr>
+  )
+}
+
+/** Render agent filters, collection summaries, and the terminal fleet with binding controls. */
 export default function AgentsPage() {
   const [q, setQ] = useState("")
   const [branch, setBranch] = useState("toutes")
   const [role, setRole] = useState("tous")
-  const [online, setOnline] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [staffId, setStaffId]   = useState(null)
+  const [tab, setTab]           = useState("agents")
+  // Re-render every minute: online/offline and the alerts depend on the time
+  // since the last check-in, which moves even when the data doesn't
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setTick(n => n + 1), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  const me  = useQuery(api.users.me)
+  const can = me?.can ?? {}
 
-  const branches = useMemo(() => ["toutes", ...Array.from(new Set(AGENTS.map(a => a.branch)))], [])
-  const roles    = useMemo(() => ["tous",   ...Array.from(new Set(AGENTS.map(a => a.role)))],   [])
+  const rows = useQuery(api.admin.listAgents)
+  const devices = useQuery(api.admin.listDevices)
+  const AGENTS = rows ?? []
+
+  const branches = useMemo(() => ["toutes", ...Array.from(new Set(AGENTS.map(a => a.branch)))], [rows])
+  const roles    = useMemo(() => ["tous",   ...Array.from(new Set(AGENTS.map(a => a.role)))],   [rows])
 
   const filtered = useMemo(() => AGENTS.filter(a => {
     if (branch !== "toutes" && a.branch !== branch) return false
     if (role   !== "tous"   && a.role   !== role)   return false
-    if (q && !a.name.toLowerCase().includes(q.toLowerCase()) && !a.phone.includes(q) && !a.device.id.toLowerCase().includes(q.toLowerCase())) return false
+    if (q && !a.name.toLowerCase().includes(q.toLowerCase()) && !a.phone.includes(q) && !(a.device?.serial ?? "").toLowerCase().includes(q.toLowerCase())) return false
     return true
-  }), [q, branch, role])
+  }), [rows, q, branch, role])
+
+  const fleet      = devices ?? []
+  // Phones waiting for a binding first, oldest request first
+  const pendingTpe  = fleet.filter(d => d.requestedBy).length
+  const staffPage = usePaged(filtered)
+  const alertedTpe  = fleet.filter(d => deviceAlerts(d).length > 0).length
+  // Binding requests first (oldest first), then devices with alerts
+  const needle = q.trim().toLowerCase()
+  const shownFleet = needle
+    ? fleet.filter(d => [d.serial, d.model, d.requester, ...(d.agents ?? []).map(a => a.name)].some(x => (x ?? "").toLowerCase().includes(needle)))
+    : fleet
+  const sortedFleet = [...shownFleet].sort((a, b) =>
+    (a.requestedBy ? 0 : 1) - (b.requestedBy ? 0 : 1) || (a.requestedAt ?? 0) - (b.requestedAt ?? 0) ||
+    deviceAlerts(b).length - deviceAlerts(a).length)
+  const fleetPage = usePaged(sortedFleet)
+  const activeTpe  = fleet.filter(d => d.status === "active").length
+  const staleTpe   = fleet.filter(d => d.status === "active" && Date.now() - d.lastSync > DEVICE_STALE_MS).length
+  const collected  = AGENTS.reduce((s, a) => s + a.collected, 0)
+  const txMonth    = AGENTS.reduce((s, a) => s + a.txMonth, 0)
+  const collectors = AGENTS.filter(a => a.txMonth > 0)
+  const AGENT_KPIS = [
+    { label: "TPE en service",    value: String(activeTpe), unit: `/${fleet.length}`, note: `${fleet.length - activeTpe} hors service · ${staleTpe} hors ligne`, icon: "users" },
+    { label: "Collecte du mois",  value: fmt(collected),    unit: "FCFA", note: `${txMonth} transactions`, icon: "wallet" },
+    { label: "Agents actifs",     value: String(AGENTS.filter(a => a.status === "active").length), unit: `/${AGENTS.length}`, note: `${branches.length - 1} agences`, icon: "cloud" },
+    { label: "Tx / agent · moy.", value: String(collectors.length ? Math.round(txMonth / collectors.length) : 0), unit: "", note: "ce mois, agents collecteurs", icon: "receipt" },
+  ]
 
   return (
     <div className="agents-page">
       <PageHeader
         crumbs={["Admin", "Agents & TPE"]}
         title="Agents & terminaux"
-        sub={`${AGENTS.length} agents · 6 TPE déployés · 3 agences couvertes`}
       >
-        <button className={"status-pill" + (online ? "" : " offline")} onClick={() => setOnline(!online)}>
-          <span className="status-dot"></span>{online ? "En ligne · synchronisé" : "Hors ligne · 4 en file"}
-        </button>
+        {/* IT admins can't open Clients or Transactions: their way in */}
+        {!can.audit && <ImportButton />}
         <Novu />
       </PageHeader>
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <button className="btn"><I.Cloud size={14}/>Forcer sync</button>
-        <button className="btn brand"><I.Plus size={14} stroke="white"/>Nouvel agent</button>
+        <SearchInput placeholder="Nom, téléphone, TPE…" value={q} onChange={e => setQ(e.target.value)} />
+        {can.manageStaff && (
+          <button className="btn brand" onClick={() => setCreating(true)}><I.Plus size={14} stroke="white"/>Nouvel agent</button>
+        )}
       </div>
-      <section className="kpi-row">
-        {AGENT_KPIS.map(k => (
-          <div className="kpi" key={k.label}>
-            <div className="kpi-label">
-              {k.icon === "users"   && <I.Users/>}
-              {k.icon === "wallet"  && <I.Wallet/>}
-              {k.icon === "receipt" && <I.Receipt/>}
-              {k.icon === "cloud"   && <I.Cloud/>}
-              {k.label}
+      {rows === undefined || devices === undefined ? <KpiSkeleton /> : (
+        <section className="kpi-row">
+          {AGENT_KPIS.map(k => (
+            <div className="kpi" key={k.label}>
+              <div className="kpi-label">
+                {k.icon === "users"   && <I.Users/>}
+                {k.icon === "wallet"  && <I.Wallet/>}
+                {k.icon === "receipt" && <I.Receipt/>}
+                {k.icon === "cloud"   && <I.Cloud/>}
+                {k.label}
+              </div>
+              <div className="kpi-value">{k.value}{k.unit && <span className="unit">{k.unit}</span>}</div>
+              <div className="kpi-foot">
+                <span>{k.note}</span>
+              </div>
             </div>
-            <div className="kpi-value">{k.value}{k.unit && <span className="unit">{k.unit}</span>}</div>
-            <div className="kpi-foot">
-              <span className={"delta " + (k.dir === "up" ? "up" : "down")}>
-                {k.dir === "up" ? <I.ArrowUR size={10} stroke="currentColor"/> : <I.ArrowDR size={10} stroke="currentColor"/>}
-                {k.delta}
-              </span>
-              <span>{k.note}</span>
-            </div>
-          </div>
-        ))}
-      </section>
-      <div className="card" style={{ marginBottom: 14 }}>
+          ))}
+        </section>
+      )}
+      <div className="seg-tabs" role="tablist" aria-label="Agents ou terminaux" style={{ marginBottom: 12 }}>
+        <button role="tab" aria-selected={tab === "agents"} className={"seg-tab" + (tab === "agents" ? " on" : "")} onClick={() => setTab("agents")}>
+          Flotte d'agents <span className="seg-count">{AGENTS.length}</span>
+        </button>
+        <button role="tab" aria-selected={tab === "tpe"} className={"seg-tab" + (tab === "tpe" ? " on" : "")} onClick={() => setTab("tpe")}>
+          Parc de terminaux <span className="seg-count">{fleet.length}</span>
+          {alertedTpe > 0 && <span className="tag alerte" title="TPE en alerte">{alertedTpe} en alerte</span>}
+        </button>
+      </div>
+
+      {tab === "agents" && (
+      <div className="card" role="tabpanel">
         <div className="card-head">
-          <div className="card-title">Flotte d'agents · TPE en service</div>
           <div className="filter-spacer"/>
-          <div className="filter-group">
-            <label className="filter-label">Agence</label>
+          <label className="filter-group">
+            <span className="filter-label">Agence</span>
             <select className="filter-select" value={branch} onChange={e => setBranch(e.target.value)}>
               {branches.map(b => <option key={b} value={b}>{b === "toutes" ? "Toutes" : b}</option>)}
             </select>
-          </div>
-          <div className="filter-group">
-            <label className="filter-label">Rôle</label>
+          </label>
+          <label className="filter-group">
+            <span className="filter-label">Rôle</span>
             <select className="filter-select" value={role} onChange={e => setRole(e.target.value)}>
               {roles.map(r => <option key={r} value={r}>{r === "tous" ? "Tous" : r}</option>)}
             </select>
-          </div>
+          </label>
         </div>
 
         <div className="table-wrap">
@@ -149,8 +370,6 @@ export default function AgentsPage() {
                 <th>Rôle</th>
                 <th>Zone / Agence</th>
                 <th>TPE</th>
-                <th>Batt.</th>
-                <th>Réseau</th>
                 <th>Sync</th>
                 <th style={{ textAlign: "right" }}>Collecte mois</th>
                 <th>Statut</th>
@@ -158,15 +377,14 @@ export default function AgentsPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(a => {
+              {staffPage.rows.map(a => {
                 const tag = ROLE_TAGS[a.role] || ROLE_TAGS["Agent terrain"]
-                const pct = a.target > 0 ? Math.round((a.collected / a.target) * 100) : 0
                 return (
                   <tr key={a.id}>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <div className="avatar sm" style={{ position: "relative" }}>
-                          {a.initials}
+                          {initials(a.name)}
                           <span style={{ position: "absolute", right: -1, bottom: -1, width: 8, height: 8, borderRadius: "50%", background: STATUS_DOT[a.status], border: "1.5px solid var(--surface)" }}/>
                         </div>
                         <div>
@@ -178,134 +396,83 @@ export default function AgentsPage() {
                     <td><span className="chip" style={{ background: tag.bg, color: tag.fg, borderColor: "transparent" }}>{a.role}</span></td>
                     <td>
                       <div>{a.branch}</div>
-                      <div className="cell-sub">{a.device.area}</div>
+                      <div className="cell-sub">{a.clients} client{a.clients > 1 ? "s" : ""}</div>
                     </td>
                     <td>
-                      <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 550 }}>{a.device.id}</div>
-                      <div className="cell-sub">{a.device.model}</div>
+                      {a.device ? (
+                        <>
+                          <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 550 }}>{a.device.serial}</div>
+                          <div className="cell-sub">{a.device.model}</div>
+                        </>
+                      ) : <span className="cell-sub">—</span>}
                     </td>
-                    <td><Battery pct={a.device.battery}/></td>
-                    <td><SignalBars level={a.device.signal}/></td>
                     <td>
-                      <SyncTag d={a.device}/>
-                      <div className="cell-sub" style={{ marginTop: 2 }}>{a.device.lastSync}</div>
+                      {a.device ? (
+                        <>
+                          <SyncTag d={a.device}/>
+                          <div className="cell-sub" style={{ marginTop: 2 }}>{relTime(a.device.lastSync)}</div>
+                        </>
+                      ) : <span className="cell-sub">—</span>}
                     </td>
                     <td style={{ textAlign: "right", minWidth: 130 }}>
                       <div style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
                         {a.collected ? fmt(a.collected) : "—"}
                       </div>
-                      {a.target > 0 && (
-                        <>
-                          <div className="goal-bar" style={{ marginTop: 4 }}>
-                            <div className="goal-fill" style={{ width: Math.min(100, pct) + "%" }}/>
-                          </div>
-                          <div className="cell-sub" style={{ marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{pct}% obj.</div>
-                        </>
-                      )}
+                      {a.txMonth > 0 && <div className="cell-sub" style={{ marginTop: 2 }}>{a.txMonth} tx</div>}
                     </td>
                     <td>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
                         <span style={{ width: 6, height: 6, borderRadius: "50%", background: STATUS_DOT[a.status] }}/>
-                        {a.status}
+                        {STATUS_LABEL[a.status]}
                       </span>
                     </td>
-                    <td><button className="btn ghost sm" style={{ padding: 4 }}><I.More size={14}/></button></td>
+                    <td>
+                      {can.manageStaff && (
+                        <button className="btn ghost sm" style={{ padding: 4 }} title="Gérer le compte"
+                          aria-label={`Gérer le compte de ${a.name}`} onClick={() => setStaffId(a.id)}>
+                          <I.More size={14}/>
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
+          {rows === undefined && <TableSkeleton rows={6} label="Chargement du personnel…" />}
+          <Pager paged={staffPage} unit="membres" />
         </div>
       </div>
+      )}
 
-      <div className="row cols-2 agents-row" style={{ marginBottom: 14 }}>
-        <div className="card">
-          <div className="card-head">
-            <div className="card-title">Top collecteurs · ce mois</div>
-            <span className="card-sub" style={{ marginLeft: "auto" }}>Sur le terrain</span>
-          </div>
-          <div style={{ padding: "4px 14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
-            {[...AGENTS].filter(a => a.collected).sort((a,b) => b.collected - a.collected).slice(0,4).map((a, i) => {
-              const pct = Math.round((a.collected / a.target) * 100)
-              return (
-                <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ width: 18, fontWeight: 600, color: "var(--ink-3)", fontVariantNumeric: "tabular-nums", fontSize: 12 }}>{i+1}</div>
-                  <div className="avatar sm">{a.initials}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 550, fontSize: 13 }}>{a.name}</div>
-                    <div className="cell-sub" style={{ fontFamily: "var(--font-mono)", fontSize: 10.5 }}>{a.device.id} · {a.device.area}</div>
-                    <div className="goal-bar" style={{ marginTop: 4 }}>
-                      <div className="goal-fill" style={{ width: Math.min(100, pct) + "%" }}/>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{fmt(a.collected)}</div>
-                    <div className="cell-sub">{pct}% obj.</div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-head">
-            <div className="card-title">Permissions · matrice</div>
-            <span className="card-action" style={{ marginLeft: "auto" }}>Modifier <I.Arrow size={12}/></span>
-          </div>
-          <div style={{ padding: "0 14px 14px", overflowX: "auto" }}>
-            <table className="perm-table">
-              <thead>
-                <tr><th></th><th>Admin</th><th>Superv.</th><th>Agent</th><th>Caisse</th></tr>
-              </thead>
-              <tbody>
-                {[
-                  ["Voir clients",            1,1,1,1],
-                  ["Inscrire (KYC sur TPE)",  1,1,1,0],
-                  ["Encaisser dépôt",         1,1,1,1],
-                  ["Valider retrait",         1,1,0,1],
-                  ["Mode hors-ligne",         1,1,1,1],
-                  ["Modifier objectifs",      1,1,0,0],
-                  ["Gérer agents & TPE",      1,0,0,0],
-                ].map(([label, ...vals]) => (
-                  <tr key={label}>
-                    <td>{label}</td>
-                    {vals.map((v, i) => (
-                      <td key={i} style={{ textAlign: "center" }}>
-                        {v ? <span className="perm-yes"><I.Check size={11} stroke="white"/></span> : <span className="perm-no">—</span>}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
+      {tab === "tpe" && (
+      <div className="card" role="tabpanel">
         <div className="card-head">
-          <div className="card-title">Activité terrain · 24 dernières heures</div>
-          <span className="card-sub" style={{ marginLeft: "auto" }}>Tirée des TPE</span>
+          {pendingTpe > 0 && <span className="tag attente">{pendingTpe} demande{pendingTpe > 1 ? "s" : ""} de liaison</span>}
+          {alertedTpe > 0 && <span className="tag alerte">{alertedTpe} TPE en alerte</span>}
+          <span className="card-sub" style={{ marginLeft: "auto" }}>{fleet.length} TPE enregistrés · liaison réservée à l'Admin IT</span>
         </div>
-        <div className="feed">
-          {[
-            { who: "Aïssata Ouédraogo", act: "a inscrit",                                  amount: "Boukary Sawadogo (KYC)",      time: "il y a 32 min · TPE-021", dot: "brand" },
-            { who: "TPE-009",            act: "synchronisé après 1 h hors-ligne · ",        amount: "12 transactions envoyées",   time: "il y a 5 min",            dot: "info"  },
-            { who: "Fatim Barry",        act: "a effectué",                                 amount: "12 dépôts en agence",        time: "il y a 1 h · TPE-002",    dot: "muted" },
-            { who: "TPE-018",            act: "batterie épuisée — appareil hors service",   amount: "",                           time: "hier · 18:20",            dot: "muted" },
-            { who: "Bintou Kaboré",      act: "a modifié les permissions de",               amount: "Aïssata Ouédraogo",          time: "hier · 14:02",            dot: "info"  },
-          ].map((f, i) => (
-            <div className="feed-item" key={i}>
-              <div className={"feed-dot " + (f.dot === "muted" ? "muted" : f.dot === "info" ? "info" : "")}/>
-              <div>
-                <div className="feed-text"><strong>{f.who}</strong> {f.act} {f.amount && <strong>{f.amount}</strong>}</div>
-                <div className="feed-time">{f.time}</div>
-              </div>
-            </div>
-          ))}
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr><th>Numéro de série</th><th>Modèle</th><th>Affecté à</th><th>Statut</th><th>Téléphone</th><th>Alertes</th><th>Dernière activité</th><th><span className="sr-only">Actions</span></th></tr>
+            </thead>
+            <tbody>
+              {fleetPage.rows.map(d => (
+                <FleetRow key={d.serial} device={d} agents={AGENTS} canBind={!!can.bind}/>
+              ))}
+            </tbody>
+          </table>
+          {devices === undefined && <TableSkeleton rows={6} label="Chargement des terminaux…" />}
+          <Pager paged={fleetPage} unit="terminaux" />
         </div>
       </div>
+      )}
+      {creating && (
+        <NewStaffDrawer onClose={() => setCreating(false)}
+          onCreated={(id) => { setCreating(false); setStaffId(id) }} />
+      )}
+      {staffId && <StaffDrawer key={staffId} userId={staffId} onClose={() => setStaffId(null)} />}
     </div>
   )
 }

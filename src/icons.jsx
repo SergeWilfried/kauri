@@ -35,5 +35,5 @@ export const I = {
   Cloud:    (p) => <Icon {...p}><path d="M7 18h11a4 4 0 0 0 .5-7.95A6 6 0 0 0 7 9.5 4.5 4.5 0 0 0 7 18z"/></Icon>,
   Folder:   (p) => <Icon {...p}><path d="M3.5 7a2 2 0 0 1 2-2h3.5l2 2h7.5a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7z"/></Icon>,
   Sparkle:  (p) => <Icon {...p}><path d="M12 4v6M12 14v6M4 12h6M14 12h6M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3"/></Icon>,
-  KauriDrop:(p) => <Icon {...p}><path d="M12 3.5c-3 4-5.5 7.2-5.5 10a5.5 5.5 0 0 0 11 0c0-2.8-2.5-6-5.5-10z"/></Icon>,
+  Logout:   (p) => <Icon {...p}><path d="M14 4.5h3.5a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H14M10 16l-4-4 4-4M6 12h10"/></Icon>,
 }

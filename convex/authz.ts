@@ -7,6 +7,7 @@ import { components } from "./_generated/api";
 const permissions = definePermissions({
   transactions: {
     collect: true,     // Ability to log a new cash deposit
+    withdraw: true,    // Pay cash out of a customer's savings at the TPE
     view_ledger: true, // View personal daily collection history
     reverse: true,     // Critical: Ability to void a transaction
     audit: true,       // View all transactions across the branch
@@ -30,14 +31,30 @@ const permissions = definePermissions({
   },
   devices: {
     bind: true,        // Linking a specific TPE serial number to an agent
-  }
+  },
+  staff: {
+    manage: true,      // Create staff, change roles, suspend, issue activation codes
+  },
+  data: {
+    import: true,      // Load customers and past transactions from a spreadsheet
+  },
+  portfolio: {
+    manage: true,      // Product catalogue, a client's product, savings goal targets
+  },
 });
 
 // Step 2: Define Roles with Inheritance
 const roles = defineRoles(permissions, {
+  // Core field permissions shared by every collecting role
+  base_agent: {
+    transactions: ["collect", "view_ledger"],
+    kyc: ["register"],
+  },
+
   // Field-based role
   field_agent: {
-    includes: ["base_agent"], //
+    includes: ["base_agent"],
+    transactions: ["withdraw"],
     customers: ["create_prospect"],
     disbursements: ["request"],
   },
@@ -49,6 +66,8 @@ const roles = defineRoles(permissions, {
     kyc: ["validate"],
     customers: ["verify_identity", "edit_sensitive"],
     disbursements: ["approve"],
+    data: ["import"],
+    portfolio: ["manage"],
   },
 
   // Specialized back-office role
@@ -58,11 +77,15 @@ const roles = defineRoles(permissions, {
     // Only the accountant or a system-level role should execute the money move
     disbursements: ["execute"], 
     customers: ["verify_identity"],
+    data: ["import"],
+    portfolio: ["manage"],
   },
 
   // System management
   it_admin: {
     devices: ["bind"],
+    staff: ["manage"],
+    data: ["import"],
     // Usually IT shouldn't have 'collect' or 'reverse' permissions (Separation of Duties)
   },
 });

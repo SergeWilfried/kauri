@@ -1,0 +1,107 @@
+# Convex backend CI.
+# - Pull requests: build the web app, then deploy the branch to its own Convex
+#   preview deployment (seeded on creation). Never touches production.
+# - Push to main: deploy to production, then re-apply role definitions to
+#   existing users (convex-authz keeps a copy of each role's permissions).
+# Only this repo deploys the backend; the mobile app must not.
+# Secrets: CONVEX_DEPLOY_KEY (production), CONVEX_PREVIEW_DEPLOY_KEY (preview).
+# Deploy keys are set only on the steps that deploy, never job-wide, so
+# dependency install and build scripts can't read them.
+name: Convex
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: convex-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build web app
+        run: pnpm run build
+      # No key: fork PRs (no secrets) or previews deliberately disabled.
+      # Preview deploy keys look like preview:<team>:<project>|...
+      - name: Deploy to Convex preview
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          PREVIEW_NAME: pr-${{ github.event.pull_request.number }}
+        run: |
+          case "$CONVEX_DEPLOY_KEY" in
+            "") echo "::notice::No CONVEX_PREVIEW_DEPLOY_KEY; skipping preview deploy"; exit 0 ;;
+            preview:*) ;;
+            *) echo "::error::CONVEX_PREVIEW_DEPLOY_KEY is not a preview deploy key (it starts with '${CONVEX_DEPLOY_KEY%%:*}:'). Generate one under Convex dashboard > Project settings > Preview deploy keys, or delete the secret to disable previews."; exit 1 ;;
+          esac
+          # --preview-name reuses the PR's deployment (and its data) across
+          # pushes; --preview-run only runs when the deployment is created.
+          npx convex deploy --preview-name "$PREVIEW_NAME" --preview-run seed:seedDatabase
+
+  production:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: convex-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # A re-run of an older workflow must not roll production back
+      - name: Check this is still the latest main commit
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$head" != "$GITHUB_SHA" ]; then
+            echo "::warning::main is now at $head; skipping deploy of older $GITHUB_SHA"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+      # Refuse anything but a production key so main never lands on a dev deployment
+      - name: Deploy to Convex production
+        if: steps.latest.outputs.stale != 'true'
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          case "$CONVEX_DEPLOY_KEY" in
+            prod:*|project:*) ;;
+            *) echo "::error::CONVEX_DEPLOY_KEY must be a production or project deploy key (prod:... or project:...). Get it from the production deployment's settings in the Convex dashboard."; exit 1 ;;
+          esac
+          npx convex deploy
+      - name: Sync role permissions
+        if: steps.latest.outputs.stale != 'true'
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: npx convex run users:syncRolePermissions
+      # Shared TPEs: move legacy single bindings (devices.assignedTo) into deviceAssignments; idempotent
+      - name: Migrate device assignments
+        if: steps.latest.outputs.stale != 'true'
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: npx convex run devices:migrateAssignments

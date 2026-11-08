@@ -1,6 +1,8 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { authz } from "./authz";
+import { signedAmount } from "./transactions";
+import { requireUser } from "./users";
 
 export const settleDailyCash = mutation({
   args: {
@@ -9,33 +11,40 @@ export const settleDailyCash = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Unauthenticated");
-    await authz.require(ctx, identity.subject, "reconciliation:liquidate");
+    const verifier = await requireUser(ctx);
+    await authz.require(ctx, verifier._id, "reconciliation:liquidate");
 
     const today = new Date().toISOString().split('T')[0];
+    const dayStart = Date.parse(today + "T00:00:00Z");
 
-    // 2. Aggregate all 'completed' transactions for this agent today
-    // Note: In production, you'd use a more robust time-range check
+    const existing = await ctx.db
+      .query("reconciliations")
+      .withIndex("by_agent_date", (q) => q.eq("agentId", args.agentId).eq("date", today))
+      .first();
+    if (existing) throw new Error("Daily cash already reconciled for this agent");
+
+    // 2. Aggregate all 'completed' transactions for this agent today (UTC day)
     const transactions = await ctx.db
       .query("transactions")
       .withIndex("by_agent_date", (q) => q.eq("agentId", args.agentId))
-      .filter((q) => q.eq(q.field("status"), "completed"))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), "completed"),
+          // Imported history was never in this agent's cash drawer
+          q.neq(q.field("imported"), true),
+          q.gte(q.field("timestamp"), dayStart),
+        )
+      )
       .collect();
 
-    const systemExpected = transactions.reduce((sum, tx) => sum + tx.amount, 0);
+    // Cash the agent should hold: deposits taken in minus withdrawals paid out
+    const systemExpected = transactions.reduce((sum, tx) => sum + signedAmount(tx), 0);
     const variance = args.physicalAmount - systemExpected;
 
     // 3. Determine status
     const status = variance === 0 ? "settled" : "discrepancy";
 
     // 4. Create the reconciliation record
-    const verifier = await ctx.db
-      .query("users")
-      .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.subject))
-      .unique();
-    if (!verifier) throw new Error("User not found");
-
     if (!transactions[0]) throw new Error("No transactions found for agent today");
 
     const reconciliationId = await ctx.db.insert("reconciliations", {

@@ -1,9 +1,13 @@
 // convex/seed.ts — dev-only mock data
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
+import { authz } from "./authz";
 
-export const seedDatabase = mutation({
+export const seedDatabase = internalMutation({
   args: {},
   handler: async (ctx) => {
+    // Already seeded: no-op, so running it twice (or on real data) is harmless
+    if (await ctx.db.query("organizations").first()) return null;
+
     // ── Organization ─────────────────────────────────────────────────────────
     const org = await ctx.db.insert("organizations", {
       name: "Kauri Finance S.A.",
@@ -32,7 +36,6 @@ export const seedDatabase = mutation({
       fullName: "Aminata Ouédraogo",
       email: "aminata.ouedraogo@kauri.bf",
       phoneNumber: "+22670112233",
-      tokenIdentifier: "clerk|supervisor_001",
       branchId: branchOuaga,
       status: "active",
     });
@@ -40,7 +43,6 @@ export const seedDatabase = mutation({
       fullName: "Seydou Compaoré",
       email: "seydou.compaore@kauri.bf",
       phoneNumber: "+22676445566",
-      tokenIdentifier: "clerk|agent_001",
       branchId: branchOuaga,
       status: "active",
     });
@@ -48,7 +50,6 @@ export const seedDatabase = mutation({
       fullName: "Mariam Traoré",
       email: "mariam.traore@kauri.bf",
       phoneNumber: "+22678990011",
-      tokenIdentifier: "clerk|agent_002",
       branchId: branchOuaga,
       status: "active",
     });
@@ -56,7 +57,6 @@ export const seedDatabase = mutation({
       fullName: "Ibrahim Sawadogo",
       email: "ibrahim.sawadogo@kauri.bf",
       phoneNumber: "+22665223344",
-      tokenIdentifier: "clerk|accountant_001",
       branchId: branchOuaga,
       status: "active",
     });
@@ -64,33 +64,49 @@ export const seedDatabase = mutation({
       fullName: "Fatimata Coulibaly",
       email: "fatimata.coulibaly@kauri.bf",
       phoneNumber: "+22671556677",
-      tokenIdentifier: "clerk|agent_003",
       branchId: branchBobo,
       status: "active",
     });
+
+    const itAdmin = await ctx.db.insert("users", {
+      fullName: "Oumar Zida",
+      email: "oumar.zida@kauri.bf",
+      phoneNumber: "+22665440011",
+      branchId: branchOuaga,
+      status: "active",
+    });
+
+    // ── Roles (authz user IDs are users._id) ─────────────────────────────────
+    await authz.assignRole(ctx, supervisor, "supervisor");
+    await authz.assignRole(ctx, agent1, "field_agent");
+    await authz.assignRole(ctx, agent2, "field_agent");
+    await authz.assignRole(ctx, agentBobo, "field_agent");
+    await authz.assignRole(ctx, accountant, "accountant");
+    await authz.assignRole(ctx, itAdmin, "it_admin");
 
     // ── Devices ──────────────────────────────────────────────────────────────
     const tpe1 = await ctx.db.insert("devices", {
       serialNumber: "TPE-BF-0041",
       model: "Ingenico iWL250",
-      assignedTo: agent1,
       status: "active",
       lastSync: Date.now() - 1000 * 60 * 30, // 30 min ago
     });
     const tpe2 = await ctx.db.insert("devices", {
       serialNumber: "TPE-BF-0042",
       model: "Ingenico iWL250",
-      assignedTo: agent2,
       status: "active",
       lastSync: Date.now() - 1000 * 60 * 45,
     });
-    await ctx.db.insert("devices", {
+    const tpe3 = await ctx.db.insert("devices", {
       serialNumber: "TPE-BF-0043",
       model: "PAX A920",
-      assignedTo: agentBobo,
       status: "active",
       lastSync: Date.now() - 1000 * 60 * 60,
     });
+    // Who may collect with each TPE (a TPE can be shared; one TPE per agent)
+    for (const [deviceId, userId] of [[tpe1, agent1], [tpe2, agent2], [tpe3, agentBobo]] as const) {
+      await ctx.db.insert("deviceAssignments", { deviceId, userId, boundBy: itAdmin, boundAt: Date.now() });
+    }
     await ctx.db.insert("devices", {
       serialNumber: "TPE-BF-0099",
       model: "Ingenico iWL250",
@@ -247,7 +263,7 @@ export const seedDatabase = mutation({
     return {
       organization: org,
       branches: [branchOuaga, branchBobo],
-      users: [supervisor, agent1, agent2, accountant, agentBobo],
+      users: [supervisor, agent1, agent2, accountant, agentBobo, itAdmin],
       customers: [customer1, customer2, customer3, customer4, customer5],
     };
   },

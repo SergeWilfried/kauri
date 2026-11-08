@@ -9,15 +9,20 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@auth/core": "0.41.3",
+    "@convex-dev/auth": "0.0.96",
     "@djpanda/convex-authz": "^2.3.1",
+    "@formance/formance-sdk": "7.0.1",
     "@novu/react": "^3.16.0",
+    "@sentry/react": "^11.8.0",
     "convex": "^1.37.0",
     "install": "^0.13.0",
     "react": "^19.1.0",
-    "react-cmdk": "^1.3.9",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "read-excel-file": "9.3.10"
   },
   "devDependencies": {
+    "@sentry/vite-plugin": "^11.8.0",
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^6.3.4"
   }

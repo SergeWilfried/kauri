@@ -1,0 +1,25 @@
+// Cloudflare Workers config: static Vite build served as assets (no Worker
+// script). The name must match the Worker in the Cloudflare dashboard.
+{
+  "name": "tontipro-admin",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    // Single-page app: unknown paths serve index.html
+    "not_found_handling": "single-page-application"
+  },
+  // Matches the Worker's settings in the Cloudflare dashboard, so wrangler
+  // deploy doesn't report a config mismatch
+  "previews": {
+    "vars": {
+      "ADMIN_ALLOW_ANONYMOUS": "false"
+    }
+  },
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "persist": true
+    }
+  }
+}

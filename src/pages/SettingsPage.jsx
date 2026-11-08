@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { I } from '../icons'
+import { MizoMark } from '../components/Brand'
 import { PageHeader } from '../components'
 import Novu from '../components/Inbox'
+import PermissionsMatrix from '../components/PermissionsMatrix'
 
 
+/** Settings section card with title and optional subtitle. */
 function SetCard({ title, sub, children }) {
   return (
     <div className="card">
@@ -16,27 +19,30 @@ function SetCard({ title, sub, children }) {
   )
 }
 
+/** Labelled form field. */
 function Field({ label, sub, children }) {
   return (
-    <div className="field">
-      <label className="field-label">{label}{sub && <span className="cell-sub" style={{ fontWeight: 400, marginLeft: 6 }}>· {sub}</span>}</label>
+    <label className="field">
+      <span className="field-label">{label}{sub && <span className="cell-sub" style={{ fontWeight: 400, marginLeft: 6 }}>· {sub}</span>}</span>
       {children}
-    </div>
+    </label>
   )
 }
 
+/** Labelled on/off switch row. */
 function Toggle({ label, sub, value, onChange }) {
   return (
-    <div className="toggle-row" onClick={() => onChange(!value)}>
+    <button type="button" role="switch" aria-checked={value} className="toggle-row" onClick={() => onChange(!value)}>
       <div>
         <div style={{ fontWeight: 550, fontSize: 13 }}>{label}</div>
         {sub && <div className="cell-sub">{sub}</div>}
       </div>
       <span className={"switch " + (value ? "on" : "")}><span className="knob"/></span>
-    </div>
+    </button>
   )
 }
 
+/** Settings sections (local state only, not persisted yet). */
 export default function SettingsPage() {
   const [section, setSection] = useState("agence")
   const [orgName, setOrgName] = useState("Kauri Microfinance")
@@ -45,13 +51,15 @@ export default function SettingsPage() {
   const [autoLock, setAutoLock] = useState(5)
   const [notif, setNotif] = useState({ deposit: true, withdraw: true, lowBattery: true, syncFail: true, weekly: false })
   const [bgSync, setBgSync] = useState(true)
+  const [blockOfflineWithdrawals, setBlockOfflineWithdrawals] = useState(true)
+  const [autoExport, setAutoExport] = useState(true)
   const [offlineDays, setOfflineDays] = useState(3)
   const [isEditing, setIsEditing] = useState(false)
-  const [online, setOnline] = useState(true)
   const sections = [
     { k: "agence",        label: "Agence",       icon: <I.Pin/> },
     { k: "tpe",           label: "Terminaux TPE", icon: <I.Wifi/> },
     { k: "securite",      label: "Sécurité",      icon: <I.Shield/> },
+    { k: "roles",         label: "Rôles & permissions", icon: <I.Users/> },
     { k: "notifications", label: "Notifications", icon: <I.Bell/> },
     { k: "facturation",   label: "Facturation",   icon: <I.Wallet/> },
     { k: "integrations",  label: "Intégrations",  icon: <I.Cloud/> },
@@ -62,7 +70,6 @@ export default function SettingsPage() {
       <PageHeader
         crumbs={["Paramètres"]}
         title="Paramètres"
-        sub="Configuration de l'institution, des terminaux et de la sécurité"
       >
         {isEditing ? (
           <>
@@ -71,9 +78,6 @@ export default function SettingsPage() {
           </>
         ) : (
           <>
-          <button className={"status-pill" + (online ? "" : " offline")} onClick={() => setOnline(!online)}>
-            <span className="status-dot"></span>{online ? "En ligne · synchronisé" : "Hors ligne · 4 en file"}
-          </button>
           <Novu />
           </>
         )}
@@ -82,7 +86,7 @@ export default function SettingsPage() {
       <div className="settings-grid">
         <aside className="settings-nav">
           {sections.map(s => (
-            <button key={s.k} className={"settings-nav-item " + (section === s.k ? "on" : "")} onClick={() => setSection(s.k)}>
+            <button key={s.k} aria-pressed={section === s.k} className={"settings-nav-item " + (section === s.k ? "on" : "")} onClick={() => setSection(s.k)}>
               {s.icon}<span>{s.label}</span>
             </button>
           ))}
@@ -106,9 +110,9 @@ export default function SettingsPage() {
                 </Field>
                 <Field label="Logo (PNG/SVG)">
                   <div className="upload">
-                    <div className="brand-mark" style={{ width: 40, height: 40 }}><I.KauriDrop stroke="white"/></div>
+                    <MizoMark size={40} />
                     <div>
-                      <div style={{ fontWeight: 550, fontSize: 13 }}>kauri-logo.svg</div>
+                      <div style={{ fontWeight: 550, fontSize: 13 }}>mizo-logo.svg</div>
                       <div className="cell-sub">3,2 Ko · remplacer</div>
                     </div>
                     <button className="btn sm" style={{ marginLeft: "auto" }}>Choisir…</button>
@@ -130,7 +134,7 @@ export default function SettingsPage() {
                         <td className="cell-sub" style={{ fontFamily: "var(--font-mono)" }}>{b.c}</td>
                         <td>{b.a}</td>
                         <td><span className="tag actif">Actif</span></td>
-                        <td><button className="btn ghost sm" style={{ padding: 4 }}><I.More size={14}/></button></td>
+                        <td><button className="btn ghost sm" style={{ padding: 4 }} aria-label={`Actions pour ${b.n}`}><I.More size={14}/></button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -147,7 +151,7 @@ export default function SettingsPage() {
                 <Field label={`Durée maximale hors-ligne · ${offlineDays} jours`} sub="Au-delà, le TPE refuse de nouveaux mouvements jusqu'à sync.">
                   <input type="range" min={1} max={14} value={offlineDays} onChange={e => setOfflineDays(+e.target.value)} style={{ width: "100%" }}/>
                 </Field>
-                <Toggle label="Bloquer les retraits hors-ligne" sub="Recommandé. Les dépôts restent autorisés." value={true} onChange={() => {}}/>
+                <Toggle label="Bloquer les retraits hors-ligne" sub="Recommandé. Les dépôts restent autorisés." value={blockOfflineWithdrawals} onChange={setBlockOfflineWithdrawals}/>
               </SetCard>
 
               <SetCard title="Plafonds par transaction" sub="Limites appliquées au TPE; les superviseurs peuvent valider au-delà.">
@@ -160,7 +164,7 @@ export default function SettingsPage() {
                 <div className="upload">
                   <div style={{ width: 36, height: 36, borderRadius: 8, background: "var(--info-soft)", display: "grid", placeItems: "center", color: "var(--info)" }}><I.Cloud size={18}/></div>
                   <div>
-                    <div style={{ fontWeight: 550, fontSize: 13 }}>Kauri TPE 4.2.1 · 4 mai 2026</div>
+                    <div style={{ fontWeight: 550, fontSize: 13 }}>Mizo TPE 4.2.1 · 4 mai 2026</div>
                     <div className="cell-sub">Corrige le délai de sync sur réseau 2G.</div>
                   </div>
                   <button className="btn brand sm" style={{ marginLeft: "auto" }}>Déployer</button>
@@ -190,9 +194,15 @@ export default function SettingsPage() {
                     <option>12 mois</option><option>24 mois</option><option>36 mois</option><option>60 mois</option>
                   </select>
                 </Field>
-                <Toggle label="Exporter automatiquement vers le coffre" sub="Sauvegarde chiffrée chaque dimanche à 02:00." value={true} onChange={() => {}}/>
+                <Toggle label="Exporter automatiquement vers le coffre" sub="Sauvegarde chiffrée chaque dimanche à 02:00." value={autoExport} onChange={setAutoExport}/>
               </SetCard>
             </>
+          )}
+
+          {section === "roles" && (
+            <SetCard title="Permissions · matrice" sub="Ce que chaque rôle peut faire. Les rôles s'attribuent depuis Agents & TPE.">
+              <PermissionsMatrix />
+            </SetCard>
           )}
 
           {section === "notifications" && (
@@ -237,7 +247,7 @@ export default function SettingsPage() {
           )}
 
           {section === "integrations" && (
-            <SetCard title="Intégrations" sub="Connectez Kauri à vos outils existants.">
+            <SetCard title="Intégrations" sub="Connectez Mizo à vos outils existants.">
               {[
                 { n: "Orange Money",         s: "Connecté",     dot: "actif",   d: "Encaissements MoMo en temps réel" },
                 { n: "Moov Africa",          s: "Connecté",     dot: "actif",   d: "Encaissements MoMo en temps réel" },
